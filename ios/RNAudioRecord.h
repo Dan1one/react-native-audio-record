@@ -1,6 +1,7 @@
 #import <AVFoundation/AVFoundation.h>
 #import <React/RCTEventEmitter.h>
 #import <React/RCTLog.h>
+#import "TPCircularBuffer.h"
 
 #define kNumberBuffers 3
 
@@ -13,6 +14,7 @@ typedef struct {
     UInt32                      bufferByteSize;
     SInt64                      mCurrentPacket;
     bool                        mIsRunning;
+    TPCircularBuffer                mCircularBuffer;
 } AQRecordState;
 
 @interface RNAudioRecord : RCTEventEmitter <RCTBridgeModule>

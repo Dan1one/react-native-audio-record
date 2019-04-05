@@ -69,7 +69,7 @@ RCT_EXPORT_METHOD(stop:(RCTPromiseResolveBlock)resolve
         AudioQueueDispose(_recordState.mQueue, true);
         AudioFileClose(_recordState.mAudioFile);
         
-        TPCircularBufferCleanup(&_recordState.mCircularBuffer)
+        TPCircularBufferCleanup(&_recordState.mCircularBuffer);
         TPCircularBufferClear(&_recordState.mCircularBuffer);
     }
     resolve(_filePath);

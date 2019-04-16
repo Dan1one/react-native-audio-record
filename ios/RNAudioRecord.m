@@ -1,6 +1,6 @@
 #import "RNAudioRecord.h"
 
-#define kBufferLengthForAudioBuffer 2048 * 16 * 60 // Times seconds (60)
+#define kBufferLengthForAudioBuffer 2048 * 16 * 5 // Times seconds (60)
 
 @interface RNAudioRecord ()
 
@@ -21,9 +21,10 @@ RCT_EXPORT_METHOD(init:(NSDictionary *) options) {
     _recordState.mDataFormat.mReserved          = 0;
     _recordState.mDataFormat.mFormatID          = kAudioFormatLinearPCM;
     _recordState.mDataFormat.mFormatFlags       = _recordState.mDataFormat.mBitsPerChannel == 8 ? kLinearPCMFormatFlagIsPacked : (kLinearPCMFormatFlagIsSignedInteger | kLinearPCMFormatFlagIsPacked);
-
+    
     _recordState.bufferByteSize = 2048;
     _recordState.mSelf = self;
+    self.latestTimestamp = CFAbsoluteTimeGetCurrent();
     
     NSString *fileName = options[@"wavFile"] == nil ? @"audio.wav" : options[@"wavFile"];
     NSString *docDir = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
@@ -42,6 +43,10 @@ RCT_EXPORT_METHOD(start) {
     _recordState.mIsRunning = true;
     _recordState.mCurrentPacket = 0;
     
+    _timestamps = [NSMutableArray new];
+    _totalBytes = 0;
+    _totalConsumedBytes = 0;
+    
     CFURLRef url = CFURLCreateWithString(kCFAllocatorDefault, (CFStringRef)_filePath, NULL);
     AudioFileCreateWithURL(url, kAudioFileWAVEType, &_recordState.mDataFormat, kAudioFileFlags_EraseFile, &_recordState.mAudioFile);
     CFRelease(url);
@@ -52,6 +57,24 @@ RCT_EXPORT_METHOD(start) {
         AudioQueueEnqueueBuffer(_recordState.mQueue, _recordState.mBuffers[i], 0, NULL);
     }
     AudioQueueStart(_recordState.mQueue, NULL);
+}
+
+-(void)appendTimestamps:(AudioTimeStamp)timestamp withBytes:(UInt32)bytes
+{
+    _totalBytes += bytes;
+    NSValue * timestampOBJ = [NSValue valueWithBytes:&timestamp objCType:@encode(AudioTimeStamp)];
+    NSNumber * bytesOBJ = @(self.totalBytes);
+    [self.timestamps addObject: @{bytesOBJ : timestampOBJ }];
+}
+
+-(void)consumeTimestampBytes:(UInt32)bytes;
+{
+    _totalConsumedBytes += bytes;
+    NSUInteger index = [self.timestamps indexOfObjectPassingTest:^BOOL(NSDictionary * obj, NSUInteger idx, BOOL * _Nonnull stop) {
+       return [[[obj allKeys] firstObject] unsignedIntegerValue] >= _totalConsumedBytes;
+//        return stop;
+    }];
+    [self.timestamps removeObjectsInRange:NSMakeRange(0, index)];
 }
 
 RCT_EXPORT_METHOD(stop:(RCTPromiseResolveBlock)resolve
@@ -68,11 +91,26 @@ RCT_EXPORT_METHOD(stop:(RCTPromiseResolveBlock)resolve
         AudioQueueStop(_recordState.mQueue, true);
         AudioQueueDispose(_recordState.mQueue, true);
         AudioFileClose(_recordState.mAudioFile);
+        AudioTimeStamp firstTimestamp;
+        [[[[self.timestamps firstObject] allValues] firstObject] getValue:&firstTimestamp];
+        AudioTimeStamp lastTimestamp;
+        [[[[self.timestamps lastObject] allValues] firstObject] getValue:&lastTimestamp];
+        float initial = firstTimestamp.mSampleTime/_recordState.mDataFormat.mSampleRate;
+        float final  = lastTimestamp.mSampleTime/_recordState.mDataFormat.mSampleRate;
+        float difference = final - initial;
+        
         
         TPCircularBufferCleanup(&_recordState.mCircularBuffer);
         TPCircularBufferClear(&_recordState.mCircularBuffer);
+        resolve(@{
+                  @"filePath": _filePath,
+                  @"startTime" : @(self.latestTimestamp - difference),
+                  @"endTime": @(self.latestTimestamp)
+                  });
+    } else {
+        resolve(@{});
+
     }
-    resolve(_filePath);
     unsigned long long fileSize = [[[NSFileManager defaultManager] attributesOfItemAtPath:_filePath error:nil] fileSize];
     RCTLogInfo(@"file path %@", _filePath);
     RCTLogInfo(@"file size %llu", fileSize);
@@ -97,12 +135,16 @@ void HandleInputBuffer(void *inUserData,
     //clear/consume(discard) bytes if needed
     if (availableBytes < inBuffer->mAudioDataByteSize) {
         TPCircularBufferConsume(&pRecordState->mCircularBuffer, inBuffer->mAudioDataByteSize - availableBytes);
+        [pRecordState->mSelf consumeTimestampBytes:(inBuffer->mAudioDataByteSize - availableBytes)];
     }
     
     //insert bytes into buffer
+    AudioTimeStamp ts = *inStartTime;
     TPCircularBufferProduceBytes(&pRecordState->mCircularBuffer, inBuffer->mAudioData, inBuffer->mAudioDataByteSize);
-    
+    [pRecordState->mSelf appendTimestamps:ts withBytes:inBuffer->mAudioDataByteSize];
+    [pRecordState->mSelf setLatestTimestamp:CFAbsoluteTimeGetCurrent()];
     AudioQueueEnqueueBuffer(pRecordState->mQueue, inBuffer, 0, NULL);
+    
 }
 
 - (NSArray<NSString *> *)supportedEvents {

@@ -20,4 +20,12 @@ typedef struct {
 @interface RNAudioRecord : RCTEventEmitter <RCTBridgeModule>
     @property (nonatomic, assign) AQRecordState recordState;
     @property (nonatomic, strong) NSString* filePath;
+@property (nonatomic, strong) NSMutableArray *timestamps;
+@property (nonatomic) UInt32 totalConsumedBytes;
+@property (nonatomic) UInt32 totalBytes;
+@property (nonatomic) CFAbsoluteTime latestTimestamp;
+
+-(void)appendTimestamps:(AudioTimeStamp)timestamp withBytes:(UInt32)bytes;
+-(void)consumeTimestampBytes:(UInt32)bytes;
+
 @end

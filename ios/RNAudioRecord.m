@@ -1,6 +1,6 @@
 #import "RNAudioRecord.h"
 
-#define kBufferLengthForAudioBuffer 2048 * 16 * 60 // Times seconds (60)
+#define kBufferLengthForAudioBuffer 2048 * 16 * 5 // Times seconds (60)
 
 @interface RNAudioRecord ()
 
@@ -8,7 +8,106 @@
 
 @implementation RNAudioRecord
 
+void HandleInputBuffer(void *inUserData,
+                       AudioQueueRef inAQ,
+                       AudioQueueBufferRef inBuffer,
+                       const AudioTimeStamp *inStartTime,
+                       UInt32 inNumPackets,
+                       const AudioStreamPacketDescription *inPacketDesc)
+{
+    AQRecordState* pRecordState = (AQRecordState *)inUserData;
+    
+    if (!pRecordState->mIsRunning) {
+        return;
+    }
+    
+    // read the number of bytes available
+    int32_t availableBytes = 0;
+    TPCircularBufferHead(&pRecordState->mCircularBuffer, &availableBytes);
+    
+    //clear/consume(discard) bytes if needed
+    if (availableBytes < inBuffer->mAudioDataByteSize) {
+        TPCircularBufferConsume(&pRecordState->mCircularBuffer, inBuffer->mAudioDataByteSize - availableBytes);
+        [pRecordState->mSelf consumeTimestampBytes:(inBuffer->mAudioDataByteSize - availableBytes)];
+    }
+    
+    //insert bytes into buffer
+    AudioTimeStamp ts = *inStartTime;
+    TPCircularBufferProduceBytes(&pRecordState->mCircularBuffer, inBuffer->mAudioData, inBuffer->mAudioDataByteSize);
+    [pRecordState->mSelf appendTimestamps:ts withBytes:inBuffer->mAudioDataByteSize];
+    [pRecordState->mSelf setLatestTimestamp:CFAbsoluteTimeGetCurrent()];
+    AudioQueueEnqueueBuffer(pRecordState->mQueue, inBuffer, 0, NULL);
+    
+}
+
 RCT_EXPORT_MODULE();
+
+- (NSArray<NSString *> *)supportedEvents {
+    return @[@"data"];
+}
+
+- (void)dealloc {
+    RCTLogInfo(@"dealloc");
+    AudioQueueDispose(_recordState.mQueue, true);
+}
+
+-(void)appendTimestamps:(AudioTimeStamp)timestamp withBytes:(UInt32)bytes
+{
+    _totalBytes += bytes;
+    NSValue * timestampOBJ = [NSValue valueWithBytes:&timestamp objCType:@encode(AudioTimeStamp)];
+    NSNumber * bytesOBJ = @(self.totalBytes);
+    [self.timestamps addObject: @{bytesOBJ : timestampOBJ }];
+}
+
+-(void)consumeTimestampBytes:(UInt32)bytes;
+{
+    _totalConsumedBytes += bytes;
+    NSUInteger index = [self.timestamps indexOfObjectPassingTest:^BOOL(NSDictionary * obj, NSUInteger idx, BOOL * _Nonnull stop) {
+        return [[[obj allKeys] firstObject] unsignedIntegerValue] >= _totalConsumedBytes;
+        //        return stop;
+    }];
+    [self.timestamps removeObjectsInRange:NSMakeRange(0, index)];
+}
+
+-(NSUInteger )indexForTimestamp:(double)targetTimestamp
+{
+    __block float bestDifference = CGFLOAT_MAX;
+    AudioTimeStamp firstTimestamp;
+    [[[[self.timestamps firstObject] allValues] firstObject] getValue:&firstTimestamp];
+    float initial = firstTimestamp.mSampleTime/_recordState.mDataFormat.mSampleRate;
+    
+    NSUInteger index = [self.timestamps indexOfObjectPassingTest:^BOOL(NSDictionary * obj, NSUInteger idx, BOOL * _Nonnull stop) {
+        AudioTimeStamp timestamp = [self timestampForDictionary:obj];
+        float currentTimestamp = timestamp.mSampleTime/_recordState.mDataFormat.mSampleRate;
+        float adjustedTimestamp = currentTimestamp - initial;
+        
+        if (ABS(targetTimestamp - adjustedTimestamp) <= bestDifference) {
+            bestDifference = targetTimestamp - adjustedTimestamp;
+            return NO;
+        } else {
+            return YES;
+        }
+    }];
+    
+    if(index == NSNotFound)
+    {
+        index = MAX([self.timestamps count] - 1, 0);
+    }
+    
+    return index;
+}
+
+-(AudioTimeStamp) timestampForDictionary:(NSDictionary *)targetDictionary
+{
+    AudioTimeStamp timestamp;
+    [[[targetDictionary allValues] firstObject] getValue:&timestamp];
+    return timestamp;
+}
+
+-(UInt32) byteOffsetForDictionary:(NSDictionary *)targetDictionary
+{
+    return (UInt32)[[[targetDictionary allKeys] firstObject] unsignedIntegerValue];
+}
 
 RCT_EXPORT_METHOD(init:(NSDictionary *) options) {
     RCTLogInfo(@"init");
@@ -68,122 +167,61 @@ RCT_EXPORT_METHOD(start) {
 RCT_EXPORT_METHOD(
                   outputFileWithOptions:(NSDictionary *)options
                   callback:(RCTResponseSenderBlock)callback
-                  ){
-//-(void)produceFileWithOptions:(NSDictionary *)options
+                  )
 {
-    NSNumber *startTime = options[@"startTimestamp"];
-    NSNumber *endTime = options[@"endTimestamp"];
-    
-    if (!startTime || !endTime) {
-        callback(@[[NSError errorWithDomain:@"RNAudioRecord" code:100 userInfo:@{@"message": "Incorrect Arguments: {startTimestamp , endTimestamp} must be included"}], @{}]);
-        return;
-    }
-    
-    //generate file URL
-    NSString *fileName = @"output.wav";
-    NSString *docDir = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
-    NSString *targetFilepath = [NSString stringWithFormat:@"%@/%@", docDir, fileName];
-    
-    //Create AudioFile
-    
-    CFURLRef url = CFURLCreateWithString(kCFAllocatorDefault, (CFStringRef)targetFilepath, NULL);
-    AudioFileID targetFile;
-    AudioFileCreateWithURL(url, kAudioFileWAVEType, &_recordState.mDataFormat, kAudioFileFlags_EraseFile, &targetFile);
-    CFRelease(url);
-    
-    //Extract Correct Time Stamps
-    UInt32 firstByteOffset = [self byteOffsetForDictionary:[[self timestamps] firstObject]];
-    NSDictionary *initialframe = [self.timestamps objectAtIndex:[self indexForTimestamp:[startTime doubleValue]]];
-    UInt32 adjustedInitialByteOffset = [self byteOffsetForDictionary:initialframe] - firstByteOffset;
-    NSDictionary *finalframe = [self.timestamps objectAtIndex:[self indexForTimestamp:[endTime doubleValue]]];
-    UInt32 adjustedFinalByteOffset = [self byteOffsetForDictionary:finalframe] - firstByteOffset;
-    
-    // CopyBytes from the right position
-    
-    // Consume bytes for the first window
-    TPCircularBufferConsume(&_recordState.mCircularBuffer, adjustedInitialByteOffset);
-    
-    //Get all the remaning bytes
-    int32_t availableBytes = 0;
-    void* sourceBuffer = TPCircularBufferTail(&_recordState.mCircularBuffer, &availableBytes);
-    
-    // Copy the desired length of the buffer
-    UInt32 totalBytes = MIN(adjustedInitialByteOffset - adjustedFinalByteOffset, availableBytes);
-    void *targetBuffer = malloc(totalBytes);
-    memcpy(targetBuffer, sourceBuffer, totalBytes);
-    
-    // Write them to file
-    
-    OSStatus err =  AudioFileWriteBytes(targetFile, false, 0, &totalBytes, targetBuffer);
-    free(targetBuffer);
-    //clean up
-    AudioFileClose(targetFile);
-    
-    
-    callback(@[[NSNull null], @{
-                   @"filePath": _filePath
-                   }]);
-}
-
-
--(void)appendTimestamps:(AudioTimeStamp)timestamp withBytes:(UInt32)bytes
-{
-    _totalBytes += bytes;
-    NSValue * timestampOBJ = [NSValue valueWithBytes:&timestamp objCType:@encode(AudioTimeStamp)];
-    NSNumber * bytesOBJ = @(self.totalBytes);
-    [self.timestamps addObject: @{bytesOBJ : timestampOBJ }];
-}
-
--(void)consumeTimestampBytes:(UInt32)bytes;
-{
-    _totalConsumedBytes += bytes;
-    NSUInteger index = [self.timestamps indexOfObjectPassingTest:^BOOL(NSDictionary * obj, NSUInteger idx, BOOL * _Nonnull stop) {
-       return [[[obj allKeys] firstObject] unsignedIntegerValue] >= _totalConsumedBytes;
-//        return stop;
-    }];
-    [self.timestamps removeObjectsInRange:NSMakeRange(0, index)];
-}
-
--(NSUInteger )indexForTimestamp:(double)targetTimestamp
-{
-    __block float bestDifference = CGFLOAT_MAX;
-    AudioTimeStamp firstTimestamp;
-    [[[[self.timestamps firstObject] allValues] firstObject] getValue:&firstTimestamp];
-    float initial = firstTimestamp.mSampleTime/_recordState.mDataFormat.mSampleRate;
-    
-    NSUInteger index = [self.timestamps indexOfObjectPassingTest:^BOOL(NSDictionary * obj, NSUInteger idx, BOOL * _Nonnull stop) {
-        AudioTimeStamp timestamp = [self timestampForDictionary:obj];
-        float currentTimestamp = timestamp.mSampleTime/_recordState.mDataFormat.mSampleRate;
-        float adjustedTimestamp = currentTimestamp - initial;
+        NSNumber *startTime = options[@"startTimestamp"];
+        NSNumber *endTime = options[@"endTimestamp"];
         
-        if (ABS(targetTimestamp - adjustedTimestamp) <= bestDifference) {
-            bestDifference = targetTimestamp - adjustedTimestamp;
-            return NO;
-        } else {
-            return YES;
+        if (!startTime || !endTime) {
+            callback(@[[NSError errorWithDomain:@"RNAudioRecord" code:100 userInfo:@{@"message": @"Incorrect Arguments: {startTimestamp , endTimestamp} must be included"}], @{}]);
+            return;
         }
-    }];
-    
-    if(index == NSNotFound)
-    {
-        index = MAX([self.timestamps count] - 1, 0);
+        
+        //generate file URL
+        NSString *fileName = @"output.wav";
+        NSString *docDir = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+        NSString *targetFilepath = [NSString stringWithFormat:@"%@/%@", docDir, fileName];
+        
+        //Create AudioFile
+        
+        CFURLRef url = CFURLCreateWithString(kCFAllocatorDefault, (CFStringRef)targetFilepath, NULL);
+        AudioFileID targetFile;
+        AudioFileCreateWithURL(url, kAudioFileWAVEType, &_recordState.mDataFormat, kAudioFileFlags_EraseFile, &targetFile);
+        CFRelease(url);
+        
+        //Extract Correct Time Stamps
+        UInt32 firstByteOffset = [self byteOffsetForDictionary:[[self timestamps] firstObject]];
+        NSDictionary *initialframe = [self.timestamps objectAtIndex:[self indexForTimestamp:[startTime doubleValue]]];
+        UInt32 adjustedInitialByteOffset = [self byteOffsetForDictionary:initialframe] - firstByteOffset;
+        NSDictionary *finalframe = [self.timestamps objectAtIndex:[self indexForTimestamp:[endTime doubleValue]]];
+        UInt32 adjustedFinalByteOffset = [self byteOffsetForDictionary:finalframe] - firstByteOffset;
+        
+        // CopyBytes from the right position
+        
+        // Consume bytes for the first window
+        TPCircularBufferConsume(&_recordState.mCircularBuffer, adjustedInitialByteOffset);
+        
+        //Get all the remaning bytes
+        int32_t availableBytes = 0;
+        void* sourceBuffer = TPCircularBufferTail(&_recordState.mCircularBuffer, &availableBytes);
+        
+        // Copy the desired length of the buffer
+        UInt32 totalBytes = MIN(adjustedInitialByteOffset - adjustedFinalByteOffset, availableBytes);
+        void *targetBuffer = malloc(totalBytes);
+        memcpy(targetBuffer, sourceBuffer, totalBytes);
+        
+        // Write them to file
+        
+        OSStatus err =  AudioFileWriteBytes(targetFile, false, 0, &totalBytes, targetBuffer);
+        free(targetBuffer);
+        //clean up
+        AudioFileClose(targetFile);
+        
+        
+        callback(@[[NSNull null], @{
+                       @"filePath": _filePath
+                       }]);
     }
-    
-    return index;
-}
-
--(AudioTimeStamp) timestampForDictionary:(NSDictionary *)targetDictionary
-{
-    AudioTimeStamp timestamp;
-    [[[targetDictionary allValues] firstObject] getValue:&timestamp];
-    return timestamp;
-}
-
--(UInt32) byteOffsetForDictionary:(NSDictionary *)targetDictionary
-{
-    return [[[targetDictionary allKeys] firstObject] unsignedIntegerValue];
-}
-
 
 
 RCT_EXPORT_METHOD(stop:(RCTPromiseResolveBlock)resolve
@@ -212,12 +250,11 @@ RCT_EXPORT_METHOD(stop:(RCTPromiseResolveBlock)resolve
         
         if(err)
         {
-            reject(@{@"error": @"Unable to save file"});
+//            reject(@{@"error": @"Unable to save file"});
+            reject(@"E_AUDIO_FILE_FAILED", @"Audio File failed to produce a file output", nil);
             return;
         }
-        
-
-        
+ 
         resolve(@{
                   @"filePath": _filePath,
                   @"startTime" : @(self.latestTimestamp - difference),
@@ -232,44 +269,5 @@ RCT_EXPORT_METHOD(stop:(RCTPromiseResolveBlock)resolve
     RCTLogInfo(@"file size %llu", fileSize);
 }
 
-void HandleInputBuffer(void *inUserData,
-                       AudioQueueRef inAQ,
-                       AudioQueueBufferRef inBuffer,
-                       const AudioTimeStamp *inStartTime,
-                       UInt32 inNumPackets,
-                       const AudioStreamPacketDescription *inPacketDesc) {
-    AQRecordState* pRecordState = (AQRecordState *)inUserData;
-    
-    if (!pRecordState->mIsRunning) {
-        return;
-    }
-    
-    // read the number of bytes available
-    int32_t availableBytes = 0;
-    TPCircularBufferHead(&pRecordState->mCircularBuffer, &availableBytes);
-    
-    //clear/consume(discard) bytes if needed
-    if (availableBytes < inBuffer->mAudioDataByteSize) {
-        TPCircularBufferConsume(&pRecordState->mCircularBuffer, inBuffer->mAudioDataByteSize - availableBytes);
-        [pRecordState->mSelf consumeTimestampBytes:(inBuffer->mAudioDataByteSize - availableBytes)];
-    }
-    
-    //insert bytes into buffer
-    AudioTimeStamp ts = *inStartTime;
-    TPCircularBufferProduceBytes(&pRecordState->mCircularBuffer, inBuffer->mAudioData, inBuffer->mAudioDataByteSize);
-    [pRecordState->mSelf appendTimestamps:ts withBytes:inBuffer->mAudioDataByteSize];
-    [pRecordState->mSelf setLatestTimestamp:CFAbsoluteTimeGetCurrent()];
-    AudioQueueEnqueueBuffer(pRecordState->mQueue, inBuffer, 0, NULL);
-    
-}
-
-- (NSArray<NSString *> *)supportedEvents {
-    return @[@"data"];
-}
-
-- (void)dealloc {
-    RCTLogInfo(@"dealloc");
-    AudioQueueDispose(_recordState.mQueue, true);
-}
 
 @end

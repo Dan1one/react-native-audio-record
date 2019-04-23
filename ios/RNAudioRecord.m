@@ -178,7 +178,7 @@ RCT_EXPORT_METHOD(
         }
         
         //generate file URL
-        NSString *fileName = @"output.wav";
+    NSString *fileName = [NSString stringWithFormat:@"%@.wav", [NSUUID UUID].UUIDString];
         NSString *docDir = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
         NSString *targetFilepath = [NSString stringWithFormat:@"%@/%@", docDir, fileName];
         

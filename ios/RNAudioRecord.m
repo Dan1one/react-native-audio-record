@@ -1,6 +1,6 @@
 #import "RNAudioRecord.h"
 
-#define kBufferLengthForAudioBuffer 2048 * 16 * 5 // Times seconds (60)
+#define kBufferLengthForAudioBuffer 2048 * 16 * 60 // Times seconds (60)
 
 @interface RNAudioRecord ()
 

@@ -2,7 +2,10 @@ package com.goodatlas.audiorecord;
 
 import android.media.AudioFormat;
 import android.media.AudioRecord;
+import android.media.AudioTimestamp;
 import android.media.MediaRecorder.AudioSource;
+import android.net.Uri;
+import android.support.v4.util.CircularArray;
 import android.util.Base64;
 import android.util.Log;
 
@@ -11,15 +14,20 @@ import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
 import com.facebook.react.bridge.ReadableMap;
+import com.facebook.react.bridge.WritableMap;
+import com.facebook.react.bridge.WritableNativeMap;
 import com.facebook.react.modules.core.DeviceEventManagerModule;
 
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.util.Map;
+import java.util.Timer;
 
 public class RNAudioRecordModule extends ReactContextBaseJavaModule {
 
     private final String TAG = "RNAudioRecord";
+    private int bufferCount = 1;
     private final ReactApplicationContext reactContext;
     private DeviceEventManagerModule.RCTDeviceEventEmitter eventEmitter;
 
@@ -31,6 +39,7 @@ public class RNAudioRecordModule extends ReactContextBaseJavaModule {
     private AudioRecord recorder;
     private int bufferSize;
     private boolean isRecording;
+    private Promise completePromise;
 
     private String tmpFile;
     private String outFile;
@@ -67,7 +76,7 @@ public class RNAudioRecordModule extends ReactContextBaseJavaModule {
             }
         }
 
-        audioSource = AudioSource.VOICE_RECOGNITION;
+        audioSource = AudioSource.MIC;
         if (options.hasKey("audioSource")) {
             audioSource = options.getInt("audioSource");
         }
@@ -83,9 +92,32 @@ public class RNAudioRecordModule extends ReactContextBaseJavaModule {
         isRecording = false;
         eventEmitter = reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class);
 
+        int targetRate = sampleRateInHz;
+        for (int rate : new int[] {8000, 22050, 11025, 44100, 16000}) {  // add the rates you wish to check against
+            int targetBufferSize = AudioRecord.getMinBufferSize(rate, channelConfig, audioFormat);
+            if (targetBufferSize > 0) {
+                targetRate = rate;
+                bufferSize = targetBufferSize;
+            }
+        }
+        sampleRateInHz = targetRate;
+
         bufferSize = AudioRecord.getMinBufferSize(sampleRateInHz, channelConfig, audioFormat);
-        int recordingBufferSize = bufferSize * 3;
-        recorder = new AudioRecord(audioSource, sampleRateInHz, channelConfig, audioFormat, recordingBufferSize);
+
+        bufferCount = 60 * 2 * sampleRateInHz;
+
+        recorder = new AudioRecord(audioSource, sampleRateInHz, channelConfig, audioFormat,  bufferSize * 3);
+
+        int state = recorder.getState();
+        if (AudioRecord.STATE_INITIALIZED == state)
+        {
+            int frameSize = recorder.getBufferSizeInFrames();
+
+            Log.i("AUDIORECORD","Initialization Completed");
+
+        } else {
+            Log.e("AUDIORECORD","ERROR Initializing Audio Record");
+        }
     }
 
     @ReactMethod
@@ -99,23 +131,51 @@ public class RNAudioRecordModule extends ReactContextBaseJavaModule {
                     int bytesRead;
                     int count = 0;
                     String base64Data;
-                    byte[] buffer = new byte[bufferSize];
+                    CircularByteBuffer rb = new CircularByteBuffer(bufferCount);
+
+//                    CircularArray circularArray = new CircularArray<byte>(3);
                     FileOutputStream os = new FileOutputStream(tmpFile);
 
+                    AudioTimestamp startTS = new AudioTimestamp();
+                    recorder.getTimestamp(startTS, AudioTimestamp.TIMEBASE_MONOTONIC);
+
+
+                    byte[] buffer = new byte[bufferSize];
+                    byte[] outBuffer = new byte[bufferSize];
+                    AudioTimestamp duringTS = new AudioTimestamp();
                     while (isRecording) {
+
+                        recorder.getTimestamp(duringTS, AudioTimestamp.TIMEBASE_MONOTONIC);
                         bytesRead = recorder.read(buffer, 0, buffer.length);
-
-                        // skip first 2 buffers to eliminate "click sound"
-                        if (bytesRead > 0 && ++count > 2) {
-                            base64Data = Base64.encodeToString(buffer, Base64.NO_WRAP);
-                            eventEmitter.emit("data", base64Data);
-                            os.write(buffer, 0, bytesRead);
+                        if(rb.free() < bytesRead)
+                        {
+                            rb.get(outBuffer, 0, bytesRead - rb.free());
                         }
+                        rb.put(buffer, 0, bytesRead);
                     }
-
                     recorder.stop();
+                    // skip first 2 buffers to eliminate "click sound"
+//                        if (bytesRead > 0 && ++count > 2) {
+                    byte[] completeBuffer = new byte[rb.available()];
+                    rb.get(completeBuffer, 0, rb.available());
+//                    base64Data = Base64.encodeToString(completeBuffer, Base64.NO_WRAP);
+//                    eventEmitter.emit("data", base64Data);
+//                    os.write(completeBuffer, 0, rb.available());
+                    os.write(completeBuffer);
                     os.close();
                     saveAsWav();
+
+                    final WritableMap map = new WritableNativeMap();
+                    String targetFile = Uri.fromFile(new File(outFile)).toString();
+                    map.putString("filePath", targetFile);
+                    map.putDouble("startTime", new Long(System.currentTimeMillis()).doubleValue() - (duringTS.nanoTime - startTS.nanoTime));
+                    map.putDouble("endTime", new Long(System.currentTimeMillis()).doubleValue());
+
+                    completePromise.resolve(map);
+
+//                        }
+
+
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
@@ -126,9 +186,25 @@ public class RNAudioRecordModule extends ReactContextBaseJavaModule {
     }
 
     @ReactMethod
-    public void stop(Promise promise) {
+    public void stop(final Promise promise) {
+
+
+        completePromise = promise;
         isRecording = false;
-        promise.resolve(outFile);
+
+//        final Timer t = new java.util.Timer();
+//        t.schedule(
+//                new java.util.TimerTask() {
+//                    @Override
+//                    public void run() {
+//                        promise.resolve(map);
+//                        t.cancel();
+//                    }
+//                },
+//                10000
+//        );
+
+
     }
 
     private void saveAsWav() {

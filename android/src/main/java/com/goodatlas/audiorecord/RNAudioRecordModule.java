@@ -143,6 +143,7 @@ public class RNAudioRecordModule extends ReactContextBaseJavaModule {
                     byte[] buffer = new byte[bufferSize];
                     byte[] outBuffer = new byte[bufferSize];
                     AudioTimestamp duringTS = new AudioTimestamp();
+                    long startTime = (long) (new Long(System.currentTimeMillis()).doubleValue());
                     while (isRecording) {
 
                         recorder.getTimestamp(duringTS, AudioTimestamp.TIMEBASE_MONOTONIC);
@@ -153,6 +154,7 @@ public class RNAudioRecordModule extends ReactContextBaseJavaModule {
                         }
                         rb.put(buffer, 0, bytesRead);
                     }
+                    long endTime = (long) (new Long(System.currentTimeMillis()).doubleValue());
                     recorder.stop();
                     // skip first 2 buffers to eliminate "click sound"
 //                        if (bytesRead > 0 && ++count > 2) {
@@ -167,9 +169,10 @@ public class RNAudioRecordModule extends ReactContextBaseJavaModule {
 
                     final WritableMap map = new WritableNativeMap();
                     String targetFile = Uri.fromFile(new File(outFile)).toString();
+
                     map.putString("filePath", targetFile);
-                    map.putDouble("startTime", new Long(System.currentTimeMillis()).doubleValue() - (duringTS.nanoTime - startTS.nanoTime));
-                    map.putDouble("endTime", new Long(System.currentTimeMillis()).doubleValue());
+                    map.putDouble("startTime", startTime);
+                    map.putDouble("endTime", endTime);
 
                     completePromise.resolve(map);
 

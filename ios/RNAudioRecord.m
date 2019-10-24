@@ -234,7 +234,7 @@ RCT_EXPORT_METHOD(stop:(RCTPromiseResolveBlock)resolve
         AudioTimeStamp lastTimestamp = [self timestampForDictionary:[self.timestamps lastObject]];
         float initial = firstTimestamp.mSampleTime/_recordState.mDataFormat.mSampleRate;
         float final  = lastTimestamp.mSampleTime/_recordState.mDataFormat.mSampleRate;
-        float difference = final - initial;
+        float difference = (final - initial) ;
         
 //        [self produceFileWithOptions:@{@"startTimestamp": @(0.0f), @"endTimestamp": @(difference)}];
         

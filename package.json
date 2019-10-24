@@ -1,22 +1,55 @@
 {
-  "name": "react-native-audio-record",
-  "version": "0.2.0",
-  "description": "Audio record buffers for React Native",
-  "author": "Vinay",
-  "license": "MIT",
-  "keywords": [ "react-native", "audio", "record" ],
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "repository": {
+  "_from": "github:Dan1one/react-native-audio-record#master",
+  "_id": "react-native-audio-record@0.2.0",
+  "_inBundle": false,
+  "_location": "/react-native-audio-record",
+  "_phantomChildren": {},
+  "_requested": {
     "type": "git",
-    "url": "https://github.com/goodatlas/react-native-audio-record.git"
+    "raw": "react-native-audio-record@github:Dan1one/react-native-audio-record#master",
+    "name": "react-native-audio-record",
+    "escapedName": "react-native-audio-record",
+    "rawSpec": "github:Dan1one/react-native-audio-record#master",
+    "saveSpec": "github:Dan1one/react-native-audio-record#master",
+    "fetchSpec": null,
+    "gitCommittish": "master"
   },
+  "_requiredBy": [
+    "/"
+  ],
+  "_resolved": "github:Dan1one/react-native-audio-record#d77df2c1635d7725db7484bc333605755cadbdd3",
+  "_spec": "react-native-audio-record@github:Dan1one/react-native-audio-record#master",
+  "_where": "/Users/danielrodriguez/Documents/RN Projects/ump",
+  "author": {
+    "name": "Vinay"
+  },
+  "bugs": {
+    "url": "https://github.com/goodatlas/react-native-audio-record/issues"
+  },
+  "bundleDependencies": false,
+  "deprecated": false,
+  "description": "Audio record buffers for React Native",
   "devDependencies": {
     "babel-eslint": "^8.2.3",
     "eslint": "^4.19.1",
     "eslint-plugin-prettier": "^2.6.0",
     "prettier": "^1.12.0"
-  }
+  },
+  "homepage": "https://github.com/goodatlas/react-native-audio-record#readme",
+  "keywords": [
+    "react-native",
+    "audio",
+    "record"
+  ],
+  "license": "MIT",
+  "main": "index.js",
+  "name": "react-native-audio-record",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/goodatlas/react-native-audio-record.git"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "version": "0.2.0"
 }

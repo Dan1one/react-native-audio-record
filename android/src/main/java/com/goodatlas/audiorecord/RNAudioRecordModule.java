@@ -144,17 +144,22 @@ public class RNAudioRecordModule extends ReactContextBaseJavaModule {
                     byte[] outBuffer = new byte[bufferSize];
                     AudioTimestamp duringTS = new AudioTimestamp();
                     long startTime = (long) (new Long(System.currentTimeMillis()).doubleValue());
+                    int totalNumberOfBytesDiscarded = 0;
                     while (isRecording) {
 
                         recorder.getTimestamp(duringTS, AudioTimestamp.TIMEBASE_MONOTONIC);
                         bytesRead = recorder.read(buffer, 0, buffer.length);
                         if(rb.free() < bytesRead)
                         {
-                            rb.get(outBuffer, 0, bytesRead - rb.free());
+                            int numberOfBytesToRemove = bytesRead - rb.free();
+                            totalNumberOfBytesDiscarded += numberOfBytesToRemove;
+                            rb.get(outBuffer, 0, numberOfBytesToRemove);
                         }
                         rb.put(buffer, 0, bytesRead);
                     }
-                    long endTime = (long) (new Long(System.currentTimeMillis()).doubleValue());
+                    double now = (new Long(System.currentTimeMillis())).doubleValue();
+                    long endTime = (long) now;
+                    startTime = (long) Math.max(startTime, now - 60*1000);
                     recorder.stop();
                     // skip first 2 buffers to eliminate "click sound"
 //                        if (bytesRead > 0 && ++count > 2) {
@@ -171,8 +176,8 @@ public class RNAudioRecordModule extends ReactContextBaseJavaModule {
                     String targetFile = Uri.fromFile(new File(outFile)).toString();
 
                     map.putString("filePath", targetFile);
-                    map.putDouble("startTime", startTime);
-                    map.putDouble("endTime", endTime);
+                    map.putDouble("startTime", startTime/1000);
+                    map.putDouble("endTime", endTime/1000);
 
                     completePromise.resolve(map);
 
